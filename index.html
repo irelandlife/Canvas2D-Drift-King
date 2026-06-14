@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Heavyweight 3D Drift Simulator</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #08080a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1; 
+        }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            pointer-events: none;
+            font-family: monospace;
+        }
+        .stat-box {
+            font-size: 16px;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            margin-bottom: 4px;
+            letter-spacing: 1px;
+        }
+        #score-display { font-size: 24px; color: #00ffcc; }
+        #touch-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5; 
+        }
+        #joystick-base {
+            position: absolute;
+            width: 90px;
+            height: 90px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            visibility: hidden;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #joystick-knob {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background: #00ffcc;
+            border-radius: 50%;
+            top: 25px;
+            left: 25px;
+            box-shadow: 0 0 15px #00ffcc;
+            pointer-events: none;
+        }
+        .pedal {
+            position: absolute;
+            bottom: 35px;
+            width: 80px;
+            height: 120px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            font-size: 13px;
+            letter-spacing: 1px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.6);
+        }
+        #gas-pedal {
+            right: 25px;
+            background: linear-gradient(135deg, #00ff88, #00a85d);
+            border: 2px solid #00ff88;
+            color: #051a0e;
+        }
+        #handbrake-pedal {
+            right: 120px;
+            background: linear-gradient(135deg, #ff3333, #b31414);
+            border: 2px solid #ff3333;
+            color: #fff;
+        }
+        #reset-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 10px 18px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 12px;
+            z-index: 10;
+            letter-spacing: 1px;
+        }
+    </style>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="stat-box" id="score-display">DRIFT PTS: 0</div>
+        <div class="stat-box" id="speed-display">0 KM/H</div>
+        <div class="stat-box" id="angle-display">ANGLE: 0°</div>
+    </div>
+
+    <button id="reset-btn">RESET VEHICLE</button>
+
+    <div id="touch-overlay">
+        <div id="joystick-base"><div id="joystick-knob"></div></div>
+        <div id="handbrake-pedal" class="pedal">HANDBRAKE</div>
+        <div id="gas-pedal" class="pedal">THROTTLE</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        window.onload = function() {
+            if (typeof THREE === 'undefined') return;
+
+            const container = document.getElementById('canvas-container');
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x060608);
+
+            // Tighter field of view for dramatic cinematic depth
+            const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            // Enhanced Ambient Visibility
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            dirLight.position.set(20, 60, 20);
+            scene.add(dirLight);
+
+            // Custom Arena Ground
+            const gridHelper = new THREE.GridHelper(1000, 250, 0x1e2230, 0x12141c);
+            scene.add(gridHelper);
+
+            // --- BUILD TRACK BARRIERS (CLIPPING COURSE) ---
+            const barrierMaterial = new THREE.MeshBasicMaterial({ color: 0x1a1d24 });
+            const barrierEdgeMaterial = new THREE.MeshBasicMaterial({ color: 0xff3333 }); // Red warning strip
+            const barrierGroup = new THREE.Group();
+            
+            function createBarrier(x, z, width, depth, rotation = 0) {
+                const bBox = new THREE.Group();
+                const baseGeo = new THREE.BoxGeometry(width, 1.2, depth);
+                const baseMesh = new THREE.Mesh(baseGeo, barrierMaterial);
+                baseMesh.position.y = 0.6;
+                bBox.add(baseMesh);
+
+                // Add top red safety trim line
+                const trimGeo = new THREE.BoxGeometry(width + 0.05, 0.15, depth + 0.05);
+                const trimMesh = new THREE.Mesh(trimGeo, barrierEdgeMaterial);
+                trimMesh.position.y = 1.2;
+                bBox.add(trimMesh);
+
+                bBox.position.set(x, 0, z);
+                bBox.rotation.y = rotation;
+                barrierGroup.add(bBox);
+            }
+
+            // Create a concrete inner drift box challenge zone
+            createBarrier(0, -45, 40, 3);
+            createBarrier(0, 45, 40, 3);
+            createBarrier(-45, 0, 3, 40);
+            createBarrier(45, 0, 3, 40);
+            // Outer boundaries limits
+            createBarrier(0, -120, 240, 4);
+            createBarrier(0, 120, 240, 4);
+            createBarrier(-120, 0, 4, 240);
+            createBarrier(120, 0, 4, 240);
+            scene.add(barrierGroup);
+
+            // --- BUILD UPGRADED SPORTS VEHICLE ---
+            const carGroup = new THREE.Group();
+            scene.add(carGroup);
+
+            // Aggressive wedge low-profile car body
+            const bodyGeo = new THREE.BoxGeometry(2.0, 0.45, 4.2);
+            const bodyMat = new THREE.MeshBasicMaterial({ color: 0x111115 }); // Clean dark metal look
+            const carBody = new THREE.Mesh(bodyGeo, bodyMat);
+            carBody.position.y = 0.4;
+            carGroup.add(carBody);
+
+            // Contrasting hood accent panel
+            const hoodGeo = new THREE.BoxGeometry(1.7, 0.05, 1.8);
+            const hoodMat = new THREE.MeshBasicMaterial({ color: 0xff2a5f }); // Hot red accent stripes
+            const hood = new THREE.Mesh(hoodGeo, hoodMat);
+            hood.position.set(0, 0.63, 1.1);
+            carGroup.add(hood);
+
+            const cabinGeo = new THREE.BoxGeometry(1.4, 0.45, 1.6);
+            const cabinMat = new THREE.MeshBasicMaterial({ color: 0x0a0a0d });
+            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+            cabin.position.set(0, 0.8, -0.3);
+            carGroup.add(cabin);
+
+            // Custom Neon Underglow Geometry System
+            const glowGeo = new THREE.PlaneGeometry(2.2, 3.8);
+            glowGeo.rotateX(-Math.PI / 2);
+            const glowMat = new THREE.MeshBasicMaterial({ 
+                color: 0x00ffcc, 
+                transparent: true, 
+                opacity: 0.15,
+                blending: THREE.AdditiveBlending 
+            });
+            const underglow = new THREE.Mesh(glowGeo, glowMat);
+            underglow.position.y = 0.02; 
+            carGroup.add(underglow);
+
+            // Wide-stance stance wheels assembly
+            const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.45, 16);
+            wheelGeo.rotateZ(Math.PI / 2);
+            const wheelMat = new THREE.MeshBasicMaterial({ color: 0x22242a });
+            
+            const wheels = [];
+            const wheelPositions = [
+                [-1.05, 0.42, 1.3],  // Wide Front Left
+                [1.05, 0.42, 1.3],   // Wide Front Right
+                [-1.05, 0.42, -1.3], // Wide Rear Left
+                [1.05, 0.42, -1.3]   // Wide Rear Right
+            ];
+            wheelPositions.forEach(pos => {
+                const w = new THREE.Mesh(wheelGeo, wheelMat);
+                w.position.set(...pos);
+                carGroup.add(w);
+                wheels.push(w);
+            });
+
+            // --- HEAVY MOMENTUM DRIFT PHYSICS ENGINE TUNING ---
+            const physics = {
+                x: 0, z: 40, 
+                vx: 0, vz: 0, 
+                heading: 0, 
+                speed: 0, 
+                steerAngle: 0, 
+                score: 0,
+                // Heavy values reconfiguration
+                accel: 0.045,        // Sluggish, heavy engine ramp up
+                maxSpeed: 10.5,      // Capped low speed for methodical positioning
+                drag: 0.015,         // Glides with huge rolling momentum
+                gripDefault: 0.065,  // Very low baseline side-bite grip (feels heavy)
+                gripHandbrake: 0.006 // Completely detached inertia slides
+            };
+
+            // Touch Control Interfaces
+            const inputs = { steering: 0, gas: false, brake: false };
+            const activeTouches = {};
+            
+            const joyBase = document.getElementById('joystick-base');
+            const joyKnob = document.getElementById('joystick-knob');
+            const gasPedal = document.getElementById('gas-pedal');
+            const brakePedal = document.getElementById('handbrake-pedal');
+
+            function parseTouches(e) {
+                e.preventDefault();
+                const rectGas = gasPedal.getBoundingClientRect();
+                const rectBrake = brakePedal.getBoundingClientRect();
+                
+                inputs.gas = false;
+                inputs.brake = false;
+                let joystickTouchId = null;
+
+                for (let i = 0; i < e.touches.length; i++) {
+                    const t = e.touches[i];
+                    if (t.clientX >= rectGas.left && t.clientX <= rectGas.right && t.clientY >= rectGas.top && t.clientY <= rectGas.bottom) {
+                        inputs.gas = true;
+                        continue;
+                    }
+                    if (t.clientX >= rectBrake.left && t.clientX <= rectBrake.right && t.clientY >= rectBrake.top && t.clientY <= rectBrake.bottom) {
+                        inputs.brake = true;
+                        continue;
+                    }
+                    if (t.clientX < window.innerWidth / 2) {
+                        joystickTouchId = t;
+                    }
+                }
+
+                if (joystickTouchId) {
+                    const id = joystickTouchId.identifier;
+                    if (!activeTouches[id]) {
+                        activeTouches[id] = { startX: joystickTouchId.clientX, startY: joystickTouchId.clientY };
+                        joyBase.style.left = `${joystickTouchId.clientX}px`;
+                        joyBase.style.top = `${joystickTouchId.clientY}px`;
+                        joyBase.style.visibility = 'visible';
+                    }
+                    const dx = joystickTouchId.clientX - activeTouches[id].startX;
+                    const clampedX = Math.max(-45, Math.min(45, dx));
+                    joyKnob.style.transform = `translate(${clampedX}px, 0px)`;
+                    inputs.steering = clampedX / 45;
+                } else {
+                    joyBase.style.visibility = 'hidden';
+                    joyKnob.style.transform = 'translate(0px, 0px)';
+                    inputs.steering = 0;
+                    for (let key in activeTouches) delete activeTouches[key];
+                }
+            }
+
+            const overlay = document.getElementById('touch-overlay');
+            overlay.addEventListener('touchstart', parseTouches, {passive: false});
+            overlay.addEventListener('touchmove', parseTouches, {passive: false});
+            overlay.addEventListener('touchend', parseTouches, {passive: false});
+
+            document.getElementById('reset-btn').addEventListener('click', () => {
+                physics.x = 0; physics.z = 40; physics.vx = 0; physics.vz = 0; physics.speed = 0; physics.heading = 0;
+            });
+
+            // Core Frame Physics Processing Step Loop
+            function animate() {
+                requestAnimationFrame(animate);
+
+                // 1. Steering execution rate slowed down to represent a heavy steering rack
+                const targetSteer = inputs.steering * 0.55;
+                physics.steerAngle += (targetSteer - physics.steerAngle) * 0.08; 
+                wheels[0].rotation.y = physics.steerAngle;
+                wheels[1].rotation.y = physics.steerAngle;
+
+                // Turn rate scales based on heavy mass displacement thresholds
+                if (Math.abs(physics.speed) > 0.1) {
+                    physics.heading -= physics.steerAngle * 0.025 * (physics.speed > 0 ? 1 : -1);
+                }
+
+                const forwardX = Math.sin(physics.heading);
+                const forwardZ = Math.cos(physics.heading);
+
+                // 2. Heavy Engine Throttle Dynamics
+                if (inputs.gas) {
+                    physics.vx += forwardX * physics.accel;
+                    physics.vz += forwardZ * physics.accel;
+                }
+
+                // 3. Momentum Drift Slide Friction Calculations
+                const currentGrip = inputs.brake ? physics.gripHandbrake : physics.gripDefault;
+                physics.speed = physics.vx * forwardX + physics.vz * forwardZ;
+
+                physics.vx = physics.vx * (1 - currentGrip) + forwardX * physics.speed * currentGrip;
+                physics.vz = physics.vz * (1 - currentGrip) + forwardZ * physics.speed * currentGrip;
+                
+                physics.vx *= (1 - physics.drag);
+                physics.vz *= (1 - physics.drag);
+
+                // Top Speed clamping filter
+                const totalVel = Math.sqrt(physics.vx*physics.vx + physics.vz*physics.vz);
+                if (totalVel > physics.maxSpeed) {
+                    physics.vx = (physics.vx / totalVel) * physics.maxSpeed;
+                    physics.vz = (physics.vz / totalVel) * physics.maxSpeed;
+                }
+
+                // Apply translations
+                physics.x += physics.vx;
+                physics.z += physics.vz;
+
+                carGroup.position.set(physics.x, 0, physics.z);
+                carGroup.rotation.y = physics.heading;
+                wheels.forEach(w => w.rotation.x += physics.speed * 0.08);
+
+                // 4. Calculate Drift Angle Metrics
+                const velocityHeading = Math.atan2(physics.vx, physics.vz);
+                let driftAngle = Math.abs(velocityHeading - physics.heading);
+                while (driftAngle > Math.PI) driftAngle -= Math.PI * 2;
+                driftAngle = Math.abs(driftAngle);
+                const displayAngle = Math.round(driftAngle * (180 / Math.PI));
+
+                // 5. Dynamic Adaptive Neon Underglow Visuals
+                if (displayAngle > 18 && totalVel > 1.2) {
+                    physics.score += Math.floor(displayAngle / 12);
+                    
+                    // Intensify and grow neon splash signature during deep heavy slides
+                    underglow.material.opacity = 0.45;
+                    underglow.scale.set(1.3, 1.2, 1);
+                    hoodMat.color.setHex(0x00ffcc); // Flash accent panels
+                } else {
+                    // Rest standard low-profile cruise glow signature
+                    underglow.material.opacity = 0.12;
+                    underglow.scale.set(1, 1, 1);
+                    hoodMat.color.setHex(0xff3366);
+                }
+
+                // 6. Immersive Heavy Cinematic Chase Camera System
+                // Positioned slightly lower and further back to feel scale and mass projection
+                const camDistance = 9.5;
+                const camHeight = 3.2;
+                camera.position.set(
+                    physics.x - forwardX * camDistance,
+                    camHeight,
+                    physics.z - forwardZ * camDistance
+                );
+                camera.lookAt(physics.x, 0.4, physics.z);
+
+                // 7. Render Telemetry Output Updates
+                document.getElementById('score-display').innerText = `DRIFT PTS: ${physics.score}`;
+                document.getElementById('speed-display').innerText = `${Math.round(totalVel * 7)} KM/H`;
+                document.getElementById('angle-display').innerText = `ANGLE: ${displayAngle}°`;
+
+                renderer.render(scene, camera);
+            }
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            animate();
+        };
+    </script>
+</body>
+</html>
