@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini Drift Sandbox</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #1a1a1a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background: #282828;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            pointer-events: none;
+        }
+        .stats {
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            margin-bottom: 5px;
+            font-family: monospace;
+        }
+        #drift-score { color: #ff9f43; font-size: 20px; }
+        #instructions {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+            font-size: 12px;
+            color: rgba(255,255,255,0.6);
+            background: rgba(0,0,0,0.5);
+            padding: 8px 15px;
+            border-radius: 20px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui-layer">
+        <div class="stats" id="speedo">Speed: 0 km/h</div>
+        <div class="stats" id="drift-angle">Angle: 0°</div>
+        <div class="stats" id="drift-score">Drift Points: 0</div>
+    </div>
+    <div id="instructions">Use ARROW Keys or WASD to Drive. Press SPACEBAR for Handbrake.</div>
+    <canvas id="driftCanvas" width="800" height="600"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('driftCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game State & Metrics
+const keys = {};
+let score = 0;
+const tireTracks = [];
+const smokeParticles = [];
+
+// Physics Config Object
+const car = {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+    vx: 0,
+    vy: 0,
+    angle: -Math.PI / 2, // Start facing up
+    angularVelocity: 0,
+    speed: 0,
+    
+    // Tuning parameters
+    acceleration: 0.15,
+    maxSpeed: 7,
+    braking: 0.95,
+    handbrakeFriction: 0.98,
+    drag: 0.05,
+    steeringPower: 0.04,
+    weightTransfer: 0.12, // Sliding vs gripping balance
+};
+
+// Input Observers
+window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+// Particle Generator for Drift Smoke
+function createSmoke(x, y) {
+    smokeParticles.push({
+        x: x,
+        y: y,
+        size: Math.random() * 4 + 3,
+        alpha: 0.6,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: (Math.random() - 0.5) * 0.5
+    });
+    if (smokeParticles.length > 60) smokeParticles.shift();
+}
+
+// Draw Background Modulo-snapped Grid lines for a sense of movement
+function drawGrid(offsetX, offsetY) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 2;
+    const gridSize = 80;
+    
+    const startX = (offsetX % gridSize) - gridSize;
+    const startY = (offsetY % gridSize) - gridSize;
+
+    for (let x = startX; x < canvas.width + gridSize; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+    }
+    for (let y = startY; y < canvas.height + gridSize; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
+}
+
+function updatePhysics() {
+    // 1. Steering handling
+    let currentSteer = car.steeringPower;
+    // Lower turning capability at extreme speeds
+    const speedRatio = Math.sqrt(car.vx*car.vx + car.vy*car.vy) / car.maxSpeed;
+    
+    if (keys['a'] || keys['arrowleft']) car.angle -= currentSteer * (0.4 + speedRatio);
+    if (keys['d'] || keys['arrowright']) car.angle += currentSteer * (0.4 + speedRatio);
+
+    // 2. Compute Direction Vectors
+    const forwardX = Math.cos(car.angle);
+    const forwardY = Math.sin(car.angle);
+
+    // 3. Engine Throttle & Reverse
+    if (keys['w'] || keys['arrowup']) {
+        car.vx += forwardX * car.acceleration;
+        car.vy += forwardY * car.acceleration;
+    } else if (keys['s'] || keys['arrowdown']) {
+        car.vx -= forwardX * (car.acceleration * 0.6);
+        car.vy -= forwardY * (car.acceleration * 0.6);
+    }
+
+    // 4. Grip / Friction Intercept Logic
+    let driftFactor = car.weightTransfer;
+    if (keys[' ']) { // Handbrake active
+        driftFactor = 0.02; // Drastic traction loss
+        car.vx *= car.handbrakeFriction;
+        car.vy *= car.handbrakeFriction;
+    }
+
+    // project velocity onto forward direction vector
+    const currentSpeed = car.vx * forwardX + car.vy * forwardY;
+    
+    // Linear Interpolation matching real heading vector vs actual trajectory matrix
+    car.vx = car.vx * (1 - driftFactor) + forwardX * currentSpeed * driftFactor;
+    car.vy = car.vy * (1 - driftFactor) + forwardY * currentSpeed * driftFactor;
+
+    // Apply natural fluid drag forces
+    car.vx *= (1 - car.drag);
+    car.vy *= (1 - car.drag);
+
+    // Speed clamping
+    const absoluteSpeed = Math.sqrt(car.vx*car.vx + car.vy*car.vy);
+    if (absoluteSpeed > car.maxSpeed) {
+        car.vx = (car.vx / absoluteSpeed) * car.maxSpeed;
+        car.vy = (car.vy / absoluteSpeed) * car.maxSpeed;
+    }
+
+    // 5. Update Coordinates
+    car.x += car.vx;
+    car.y += car.vy;
+
+    // Screen wrap modulo-snapping boundaries
+    if (car.x < 0) car.x = canvas.width;
+    if (car.x > canvas.width) car.x = 0;
+    if (car.y < 0) car.y = canvas.height;
+    if (car.y > canvas.height) car.y = 0;
+
+    // 6. Calculate Drift Angle Metric
+    let angleRad = 0;
+    if (absoluteSpeed > 1) {
+        const moveAngle = Math.atan2(car.vy, car.vx);
+        angleRad = Math.abs(moveAngle - car.angle);
+        // Normalize angle variance checks
+        while (angleRad > Math.PI) angleRad -= Math.PI * 2;
+        angleRad = Math.abs(angleRad);
+    }
+    
+    const displayAngle = Math.round(angleRad * (180 / Math.PI));
+
+    // 7. Scoring & Visual Particle Emission triggers
+    if (displayAngle > 22 && absoluteSpeed > 2.5) {
+        score += Math.floor(displayAngle / 10);
+        
+        // Spawn skid tracks from rear axle footprint positions
+        tireTracks.push({x: car.x - forwardX * 10, y: car.y - forwardY * 10, alpha: 0.4});
+        if (tireTracks.length > 200) tireTracks.shift();
+
+        createSmoke(car.x - forwardX * 12, car.y - forwardY * 12);
+    }
+
+    // Live UI Telemetry rendering
+    document.getElementById('speedo').innerText = `Speed: ${Math.round(absoluteSpeed * 20)} km/h`;
+    document.getElementById('drift-angle').innerText = `Angle: ${displayAngle}°`;
+    document.getElementById('drift-score').innerText = `Drift Points: ${score}`;
+}
+
+function drawGame() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Environment background
+    drawGrid(canvas.width - car.x, canvas.height - car.y);
+
+    // Draw historic Skid Marks
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+    tireTracks.forEach(track => {
+        ctx.beginPath();
+        ctx.arc(track.x, track.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Draw active tire smoke particles
+    smokeParticles.forEach((p, index) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.015;
+        if (p.alpha <= 0) {
+            smokeParticles.splice(index, 1);
+            return;
+        }
+        ctx.fillStyle = `rgba(200, 200, 200, ${p.alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Draw Car geometry profile
+    ctx.save();
+    ctx.translate(car.x, car.y);
+    ctx.rotate(car.angle);
+
+    // Chassis Box
+    ctx.fillStyle = '#e74c3c';
+    ctx.fillRect(-16, -10, 32, 20);
+
+    // Windshield accents
+    ctx.fillStyle = '#3498db';
+    ctx.fillRect(4, -7, 6, 14);
+
+    // Tail lights
+    ctx.fillStyle = '#f1c40f';
+    ctx.fillRect(-16, -9, 2, 4);
+    ctx.fillRect(-16, 5, 2, 4);
+
+    ctx.restore();
+}
+
+function loop() {
+    updatePhysics();
+    drawGame();
+    requestAnimationFrame(loop);
+}
+
+// Initialize loop execution
+loop();
+</script>
+
+</body>
+</html>
