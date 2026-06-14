@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Advanced 3D Drift Sandbox</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0b0b0e;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            touch-action: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1; 
+        }
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            pointer-events: none;
+            font-family: monospace;
+        }
+        .stat-box {
+            font-size: 18px;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            margin-bottom: 4px;
+        }
+        #score-display { font-size: 26px; color: #00ffcc; }
+        #touch-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5; 
+        }
+        #joystick-base {
+            position: absolute;
+            width: 90px;
+            height: 90px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            border-radius: 50%;
+            visibility: hidden;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #joystick-knob {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background: #00ffcc;
+            border-radius: 50%;
+            top: 25px;
+            left: 25px;
+            box-shadow: 0 0 15px #00ffcc;
+            pointer-events: none;
+        }
+        .pedal {
+            position: absolute;
+            bottom: 30px;
+            width: 75px;
+            height: 130px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+        }
+        #gas-pedal {
+            right: 30px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            border: 2px solid #2ecc71;
+            color: #fff;
+        }
+        #handbrake-pedal {
+            right: 125px;
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            border: 2px solid #e74c3c;
+            color: #fff;
+        }
+        #reset-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 10px 18px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            border-radius: 6px;
+            font-weight: bold;
+            z-index: 10;
+        }
+    </style>
+
+    <script>
+        window.addEventListener('error', function(e) {
+            console.log("Runtime caught intercept: ", e.message);
+        });
+    </script>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="stat-box" id="score-display">DRIFT PTS: 0</div>
+        <div class="stat-box" id="speed-display">0 KM/H</div>
+        <div class="stat-box" id="angle-display">ANGLE: 0°</div>
+    </div>
+
+    <button id="reset-btn">RESET CAR</button>
+
+    <div id="touch-overlay">
+        <div id="joystick-base"><div id="joystick-knob"></div></div>
+        <div id="handbrake-pedal" class="pedal">BRAKE</div>
+        <div id="gas-pedal" class="pedal">GAS</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // Force wrap everything inside initialization gate to prevent empty DOM lookups on mobile layout changes
+        window.onload = function() {
+            if (typeof THREE === 'undefined') {
+                document.body.innerHTML = "<div style='padding:50px;color:white;text-align:center;'>Three.js script block was blocked by your browser network layer. Check network links.</div>";
+                return;
+            }
+
+            const container = document.getElementById('canvas-container');
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0f);
+
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Re-engineered canvas engine fallback
+            const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            // Lighting Configs
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 40, 20);
+            scene.add(dirLight);
+
+            // Neon cyan arena floor plane layout
+            const gridHelper = new THREE.GridHelper(800, 150, 0x00ffcc, 0x2c2c3e);
+            scene.add(gridHelper);
+
+            // Assemble 3D Composite Chassis Car Profile Shape
+            const carGroup = new THREE.Group();
+            scene.add(carGroup);
+
+            const bodyGeo = new THREE.BoxGeometry(1.8, 0.6, 3.8);
+            const bodyMat = new THREE.MeshBasicMaterial({ color: 0xff3366 }); // Basic shaders have perfect mobile runtime compatibility
+            const carBody = new THREE.Mesh(bodyGeo, bodyMat);
+            carBody.position.y = 0.5;
+            carGroup.add(carBody);
+
+            const cabinGeo = new THREE.BoxGeometry(1.3, 0.5, 1.8);
+            const cabinMat = new THREE.MeshBasicMaterial({ color: 0x1c1c24 });
+            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+            cabin.position.set(0, 0.9, -0.2);
+            carGroup.add(cabin);
+
+            // Wheel systems configurations
+            const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 12);
+            wheelGeo.rotateZ(Math.PI / 2);
+            const wheelMat = new THREE.MeshBasicMaterial({ color: 0x333338 });
+            
+            const wheels = [];
+            const wheelPositions = [[-0.9, 0.4, 1.1], [0.9, 0.4, 1.1], [-0.9, 0.4, -1.1], [0.9, 0.4, -1.1]];
+            wheelPositions.forEach(pos => {
+                const w = new THREE.Mesh(wheelGeo, wheelMat);
+                w.position.set(...pos);
+                carGroup.add(w);
+                wheels.push(w);
+            });
+
+            // Physics Vector States
+            const physics = {
+                x: 0, z: 0, vx: 0, vz: 0, heading: 0, speed: 0, steerAngle: 0, score: 0,
+                accel: 0.15, maxSpeed: 20, drag: 0.04, gripDefault: 0.12, gripHandbrake: 0.015
+            };
+
+            // Touch Control Interfaces
+            const inputs = { steering: 0, gas: false, brake: false };
+            const activeTouches = {};
+            
+            const joyBase = document.getElementById('joystick-base');
+            const joyKnob = document.getElementById('joystick-knob');
+            const gasPedal = document.getElementById('gas-pedal');
+            const brakePedal = document.getElementById('handbrake-pedal');
+
+            function parseTouches(e) {
+                e.preventDefault();
+                const rectGas = gasPedal.getBoundingClientRect();
+                const rectBrake = brakePedal.getBoundingClientRect();
+                
+                inputs.gas = false;
+                inputs.brake = false;
+                let joystickTouchId = null;
+
+                for (let i = 0; i < e.touches.length; i++) {
+                    const t = e.touches[i];
+                    if (t.clientX >= rectGas.left && t.clientX <= rectGas.right && t.clientY >= rectGas.top && t.clientY <= rectGas.bottom) {
+                        inputs.gas = true;
+                        continue;
+                    }
+                    if (t.clientX >= rectBrake.left && t.clientX <= rectBrake.right && t.clientY >= rectBrake.top && t.clientY <= rectBrake.bottom) {
+                        inputs.brake = true;
+                        continue;
+                    }
+                    if (t.clientX < window.innerWidth / 2) {
+                        joystickTouchId = t;
+                    }
+                }
+
+                if (joystickTouchId) {
+                    const id = joystickTouchId.identifier;
+                    if (!activeTouches[id]) {
+                        activeTouches[id] = { startX: joystickTouchId.clientX, startY: joystickTouchId.clientY };
+                        joyBase.style.left = `${joystickTouchId.clientX}px`;
+                        joyBase.style.top = `${joystickTouchId.clientY}px`;
+                        joyBase.style.visibility = 'visible';
+                    }
+                    const dx = joystickTouchId.clientX - activeTouches[id].startX;
+                    const clampedX = Math.max(-45, Math.min(45, dx));
+                    joyKnob.style.transform = `translate(${clampedX}px, 0px)`;
+                    inputs.steering = clampedX / 45;
+                } else {
+                    joyBase.style.visibility = 'hidden';
+                    joyKnob.style.transform = 'translate(0px, 0px)';
+                    inputs.steering = 0;
+                    for (let key in activeTouches) delete activeTouches[key];
+                }
+            }
+
+            const overlay = document.getElementById('touch-overlay');
+            overlay.addEventListener('touchstart', parseTouches, {passive: false});
+            overlay.addEventListener('touchmove', parseTouches, {passive: false});
+            overlay.addEventListener('touchend', parseTouches, {passive: false});
+
+            document.getElementById('reset-btn').addEventListener('click', () => {
+                physics.x = 0; physics.z = 0; physics.vx = 0; physics.vz = 0; physics.speed = 0; physics.heading = 0;
+            });
+
+            // Physics Render Frame Step Engine Loop
+            function animate() {
+                requestAnimationFrame(animate);
+
+                // Calculations Module
+                const targetSteer = inputs.steering * 0.45;
+                physics.steerAngle += (targetSteer - physics.steerAngle) * 0.15;
+                wheels[0].rotation.y = physics.steerAngle;
+                wheels[1].rotation.y = physics.steerAngle;
+
+                if (Math.abs(physics.speed) > 0.2) {
+                    physics.heading -= physics.steerAngle * 0.04 * (physics.speed > 0 ? 1 : -1);
+                }
+
+                const forwardX = Math.sin(physics.heading);
+                const forwardZ = Math.cos(physics.heading);
+
+                if (inputs.gas) {
+                    physics.vx += forwardX * physics.accel;
+                    physics.vz += forwardZ * physics.accel;
+                }
+
+                const currentGrip = inputs.brake ? physics.gripHandbrake : physics.gripDefault;
+                physics.speed = physics.vx * forwardX + physics.vz * forwardZ;
+
+                physics.vx = physics.vx * (1 - currentGrip) + forwardX * physics.speed * currentGrip;
+                physics.vz = physics.vz * (1 - currentGrip) + forwardZ * physics.speed * currentGrip;
+                physics.vx *= (1 - physics.drag);
+                physics.vz *= (1 - physics.drag);
+
+                physics.x += physics.vx;
+                physics.z += physics.vz;
+
+                carGroup.position.set(physics.x, 0, physics.z);
+                carGroup.rotation.y = physics.heading;
+                wheels.forEach(w => w.rotation.x += physics.speed * 0.1);
+
+                // Tracking Angle Logic updates
+                const velocityHeading = Math.atan2(physics.vx, physics.vz);
+                let driftAngle = Math.abs(velocityHeading - physics.heading);
+                while (driftAngle > Math.PI) driftAngle -= Math.PI * 2;
+                driftAngle = Math.abs(driftAngle);
+                const displayAngle = Math.round(driftAngle * (180 / Math.PI));
+                const actualVelocity = Math.sqrt(physics.vx*physics.vx + physics.vz*physics.vz);
+
+                if (displayAngle > 22 && actualVelocity > 1.5) {
+                    physics.score += Math.floor(displayAngle / 10);
+                    bodyMat.color.setHex(0x00ffcc);
+                } else {
+                    bodyMat.color.setHex(0xff3366);
+                }
+
+                // Camera Position Updates
+                camera.position.set(physics.x - forwardX * 7.5, 3.8, physics.z - forwardZ * 7.5);
+                camera.lookAt(physics.x, 0.5, physics.z);
+
+                // Text updates inside UI profiles
+                document.getElementById('score-display').innerText = `DRIFT PTS: ${physics.score}`;
+                document.getElementById('speed-display').innerText = `${Math.round(actualVelocity * 6)} KM/H`;
+                document.getElementById('angle-display').innerText = `ANGLE: ${displayAngle}°`;
+
+                renderer.render(scene, camera);
+            }
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            animate();
+        };
+    </script>
+</body>
+</html>
