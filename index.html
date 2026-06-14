@@ -26,7 +26,7 @@
             position: absolute;
             top: 0;
             left: 0;
-            z-index: 1;
+            z-index: 2; /* Force canvas above background layer */
         }
         
         /* HUD Display */
@@ -57,7 +57,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 5;
+            z-index: 5; /* Keep buttons active over canvas */
         }
         
         /* Joystick Visual Indicator */
@@ -152,21 +152,24 @@
         scene.fog = new THREE.FogExp2(0x0a0a0f, 0.015);
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        
+        // Added explicit alpha and premultipliedAlpha fallbacks for strict webview contexts
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Dynamic capping for performance stability
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         container.appendChild(renderer.domElement);
 
         // --- 2. LIGHTING ENGINE ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
 
         const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
         dirLight.position.set(40, 100, 20);
         dirLight.castShadow = true;
-        dirLight.shadow.mapSize.width = 2048;
-        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.mapSize.width = 1024; // Lowered shadow map for universal mobile frame performance
+        dirLight.shadow.mapSize.height = 1024;
         dirLight.shadow.camera.near = 0.5;
         dirLight.shadow.camera.far = 200;
         const d = 50;
@@ -178,7 +181,7 @@
 
         // Grid Cyber-Floor Map
         const gridHelper = new THREE.GridHelper(1000, 200, 0x00ffcc, 0x222233);
-        gridHelper.position.y = -0.01;
+        gridHelper.position.y = 0;
         scene.add(gridHelper);
 
         // --- 3. BUILD 3D CAR OBJECT ASSEMBLY ---
@@ -230,8 +233,7 @@
             heading: 0,
             speed: 0,
             steerAngle: 0,
-            // Configuration parameters
-            accel: 0.12,
+            accel: 0.14,
             maxSpeed: 24,
             drag: 0.04,
             gripDefault: 0.14,
@@ -245,7 +247,6 @@
         const smokeMat = new THREE.MeshBasicMaterial({ color: 0x88888a, transparent: true, opacity: 0.5 });
 
         function emitSmoke() {
-            // Emit from rear wheel zones
             const leftRearOffset = new THREE.Vector3(-0.9, 0.2, -1.2).applyMatrix4(carGroup.matrixWorld);
             const rightRearOffset = new THREE.Vector3(0.9, 0.2, -1.2).applyMatrix4(carGroup.matrixWorld);
             
@@ -256,7 +257,7 @@
                 smokeParticles.push({
                     mesh: p,
                     age: 0,
-                    maxAge: 30,
+                    maxAge: 25,
                     vx: (Math.random() - 0.5) * 0.1,
                     vy: Math.random() * 0.05 + 0.05,
                     vz: (Math.random() - 0.5) * 0.1
@@ -271,7 +272,7 @@
                 p.mesh.position.x += p.vx;
                 p.mesh.position.y += p.vy;
                 p.mesh.position.z += p.vz;
-                p.mesh.scale.multiplyScalar(1.04);
+                p.mesh.scale.multiplyScalar(1.05);
                 p.mesh.material.opacity = 1 - (p.age / p.maxAge);
                 
                 if (p.age >= p.maxAge) {
@@ -297,16 +298,13 @@
             const rectGas = gasPedal.getBoundingClientRect();
             const rectBrake = brakePedal.getBoundingClientRect();
             
-            // Clear prior states before verifying running tracks
             inputs.gas = false;
             inputs.brake = false;
             let joystickTouchId = null;
 
-            // Find tracking references across lists
             for (let i = 0; i < e.touches.length; i++) {
                 const t = e.touches[i];
                 
-                // Segment 1: Check UI Pedal Overlap Boxes
                 if (t.clientX >= rectGas.left && t.clientX <= rectGas.right && t.clientY >= rectGas.top && t.clientY <= rectGas.bottom) {
                     inputs.gas = true;
                     continue;
@@ -315,18 +313,14 @@
                     inputs.brake = true;
                     continue;
                 }
-
-                // Segment 2: Left Side Screen Screen Space holds dynamic Joystick
                 if (t.clientX < window.innerWidth / 2) {
                     joystickTouchId = t;
                 }
             }
 
-            // Handle Steering Calculations based on dynamic origin reference
             if (joystickTouchId) {
                 const id = joystickTouchId.identifier;
                 if (!activeTouches[id]) {
-                    // Touch down point sets base origin
                     activeTouches[id] = { startX: joystickTouchId.clientX, startY: joystickTouchId.clientY };
                     joyBase.style.left = `${joystickTouchId.clientX}px`;
                     joyBase.style.top = `${joystickTouchId.clientY}px`;
@@ -339,9 +333,8 @@
                 const clampedX = Math.max(-limit, Math.min(limit, dx));
                 
                 joyKnob.style.transform = `translate(${clampedX}px, 0px)`;
-                inputs.steering = clampedX / limit; // Normalized scalar value between -1 and 1
+                inputs.steering = clampedX / limit;
             } else {
-                // Clear active joystick reference maps
                 joyBase.style.visibility = 'hidden';
                 joyKnob.style.transform = 'translate(0px, 0px)';
                 inputs.steering = 0;
@@ -349,14 +342,13 @@
             }
         }
 
-        // Hook multi-touch intercept matrices
         const overlay = document.getElementById('touch-overlay');
         overlay.addEventListener('touchstart', parseTouches, {passive: false});
         overlay.addEventListener('touchmove', parseTouches, {passive: false});
         overlay.addEventListener('touchend', parseTouches, {passive: false});
         overlay.addEventListener('touchcancel', parseTouches, {passive: false});
 
-        // Add Fallback support for Keyboard Testing (WASD / Arrows / Space)
+        // Fallback Desktop Controls
         const keys = {};
         window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
         window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -373,8 +365,6 @@
         });
 
         // --- 7. FRAME RENDERING & PHYSICS CALCULATIONS MATRIX ---
-        const clock = new THREE.Clock();
-
         function animate() {
             requestAnimationFrame(animate);
             processKeyboardFallbacks();
@@ -403,11 +393,9 @@
             const currentGrip = inputs.brake ? physics.gripHandbrake : physics.gripDefault;
             physics.speed = physics.vx * forwardX + physics.vz * forwardZ;
 
-            // Blend current momentum velocities vector with forward car heading vector alignment
             physics.vx = physics.vx * (1 - currentGrip) + forwardX * physics.speed * currentGrip;
             physics.vz = physics.vz * (1 - currentGrip) + forwardZ * physics.speed * currentGrip;
 
-            // Drag resistance clamp
             physics.vx *= (1 - physics.drag);
             physics.vz *= (1 - physics.drag);
 
@@ -418,10 +406,9 @@
             carGroup.position.set(physics.x, 0, physics.z);
             carGroup.rotation.y = physics.heading;
 
-            // Animate wheel spinning matching velocity rates
             wheels.forEach(w => w.rotation.x += physics.speed * 0.05);
 
-            // 5. Evaluate Drift Slip Angle for scoring telemetry
+            // 5. Evaluate Drift Slip Angle
             const velocityHeading = Math.atan2(physics.vx, physics.vz);
             let driftAngle = Math.abs(velocityHeading - physics.heading);
             while (driftAngle > Math.PI) driftAngle -= Math.PI * 2;
@@ -433,14 +420,14 @@
             if (displayAngle > 20 && actualVelocity > 2) {
                 physics.score += Math.floor(displayAngle / 8);
                 emitSmoke();
-                bodyMat.color.setHex(0x00ffcc); // Glow cyan when actively drifting
+                bodyMat.color.setHex(0x00ffcc); // Active glow color shift
             } else {
-                bodyMat.color.setHex(0xff3366); // Return to default pink/red
+                bodyMat.color.setHex(0xff3366);
             }
 
             updateParticles();
 
-            // 6. Smooth Camera Chase Interpolation Matrix
+            // 6. Smooth Camera Chase Matrix
             const camDistance = 8;
             const camHeight = 4;
             const targetCamX = physics.x - forwardX * camDistance;
@@ -452,7 +439,7 @@
             camera.position.z += (targetCamZ - camera.position.z) * 0.08;
             camera.lookAt(physics.x, physics.y + 0.5, physics.z);
 
-            // Update Dynamic Shadow Maps to track near viewport space
+            // Adjust Shadow targets dynamically
             dirLight.position.set(physics.x + 20, 60, physics.z + 10);
             dirLight.target = carGroup;
 
@@ -464,14 +451,12 @@
             renderer.render(scene, camera);
         }
 
-        // Handle scaling corrections automatically on viewport adjustments
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Initialize Rendering Loops
         animate();
     </script>
 </body>
