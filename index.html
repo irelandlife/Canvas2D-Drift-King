@@ -2,292 +2,477 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mini Drift Sandbox</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Advanced 3D Drift Sandbox</title>
     <style>
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
         }
-        body {
-            background-color: #1a1a1a;
-            color: #fff;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
+        body, html {
+            width: 100%;
+            height: 100%;
             overflow: hidden;
+            background-color: #0b0b0e;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            touch-action: none;
         }
-        #game-container {
-            position: relative;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        canvas {
-            display: block;
-            background: #282828;
-        }
-        #ui-layer {
+        #canvas-container {
+            width: 100%;
+            height: 100%;
             position: absolute;
-            top: 15px;
-            left: 15px;
-            pointer-events: none;
+            top: 0;
+            left: 0;
+            z-index: 1;
         }
-        .stats {
-            font-size: 16px;
-            font-weight: bold;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-            margin-bottom: 5px;
+        
+        /* HUD Display */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            pointer-events: none;
             font-family: monospace;
         }
-        #drift-score { color: #ff9f43; font-size: 20px; }
-        #instructions {
+        .stat-box {
+            font-size: 18px;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            margin-bottom: 4px;
+        }
+        #score-display {
+            font-size: 26px;
+            color: #00ffcc;
+        }
+
+        /* Mobile Touch Overlay Zones */
+        #touch-overlay {
             position: absolute;
-            bottom: 15px;
-            left: 50%;
-            transform: translateX(-50%);
-            text-align: center;
-            font-size: 12px;
-            color: rgba(255,255,255,0.6);
-            background: rgba(0,0,0,0.5);
-            padding: 8px 15px;
-            border-radius: 20px;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+        }
+        
+        /* Joystick Visual Indicator */
+        #joystick-base {
+            position: absolute;
+            width: 90px;
+            height: 90px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            border-radius: 50%;
+            visibility: hidden;
+            transform: translate(-50%, -50%);
             pointer-events: none;
         }
+        #joystick-knob {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background: #00ffcc;
+            border-radius: 50%;
+            top: 25px;
+            left: 25px;
+            box-shadow: 0 0 15px #00ffcc;
+            pointer-events: none;
+        }
+
+        /* Pedals Layout */
+        .pedal {
+            position: absolute;
+            bottom: 30px;
+            width: 75px;
+            height: 130px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            transition: transform 0.05s ease;
+        }
+        #gas-pedal {
+            right: 30px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            border: 2px solid #2ecc71;
+            color: #fff;
+        }
+        #handbrake-pedal {
+            right: 125px;
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            border: 2px solid #e74c3c;
+            color: #fff;
+        }
+        #reset-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 10px 18px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            border-radius: 6px;
+            font-weight: bold;
+            z-index: 10;
+        }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-<div id="game-container">
-    <div id="ui-layer">
-        <div class="stats" id="speedo">Speed: 0 km/h</div>
-        <div class="stats" id="drift-angle">Angle: 0°</div>
-        <div class="stats" id="drift-score">Drift Points: 0</div>
+    <div id="hud">
+        <div class="stat-box" id="score-display">DRIFT PTS: 0</div>
+        <div class="stat-box" id="speed-display">0 KM/H</div>
+        <div class="stat-box" id="angle-display">ANGLE: 0°</div>
     </div>
-    <div id="instructions">Use ARROW Keys or WASD to Drive. Press SPACEBAR for Handbrake.</div>
-    <canvas id="driftCanvas" width="800" height="600"></canvas>
-</div>
 
-<script>
-const canvas = document.getElementById('driftCanvas');
-const ctx = canvas.getContext('2d');
+    <button id="reset-btn">RESET CAR</button>
 
-// Game State & Metrics
-const keys = {};
-let score = 0;
-const tireTracks = [];
-const smokeParticles = [];
+    <div id="touch-overlay">
+        <div id="joystick-base"><div id="joystick-knob"></div></div>
+        <div id="handbrake-pedal" class="pedal">BRAKE</div>
+        <div id="gas-pedal" class="pedal">GAS</div>
+    </div>
 
-// Physics Config Object
-const car = {
-    x: canvas.width / 2,
-    y: canvas.height / 2,
-    vx: 0,
-    vy: 0,
-    angle: -Math.PI / 2, // Start facing up
-    angularVelocity: 0,
-    speed: 0,
-    
-    // Tuning parameters
-    acceleration: 0.15,
-    maxSpeed: 7,
-    braking: 0.95,
-    handbrakeFriction: 0.98,
-    drag: 0.05,
-    steeringPower: 0.04,
-    weightTransfer: 0.12, // Sliding vs gripping balance
-};
+    <div id="canvas-container"></div>
 
-// Input Observers
-window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
-window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+    <script>
+        // --- 1. INITIALIZATION & THREE.JS SETUP ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0f);
+        scene.fog = new THREE.FogExp2(0x0a0a0f, 0.015);
 
-// Particle Generator for Drift Smoke
-function createSmoke(x, y) {
-    smokeParticles.push({
-        x: x,
-        y: y,
-        size: Math.random() * 4 + 3,
-        alpha: 0.6,
-        vx: (Math.random() - 0.5) * 0.5,
-        vy: (Math.random() - 0.5) * 0.5
-    });
-    if (smokeParticles.length > 60) smokeParticles.shift();
-}
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
 
-// Draw Background Modulo-snapped Grid lines for a sense of movement
-function drawGrid(offsetX, offsetY) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
-    ctx.lineWidth = 2;
-    const gridSize = 80;
-    
-    const startX = (offsetX % gridSize) - gridSize;
-    const startY = (offsetY % gridSize) - gridSize;
+        // --- 2. LIGHTING ENGINE ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
 
-    for (let x = startX; x < canvas.width + gridSize; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-    }
-    for (let y = startY; y < canvas.height + gridSize; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-    }
-}
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(40, 100, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 200;
+        const d = 50;
+        dirLight.shadow.camera.left = -d;
+        dirLight.shadow.camera.right = d;
+        dirLight.shadow.camera.top = d;
+        dirLight.shadow.camera.bottom = -d;
+        scene.add(dirLight);
 
-function updatePhysics() {
-    // 1. Steering handling
-    let currentSteer = car.steeringPower;
-    // Lower turning capability at extreme speeds
-    const speedRatio = Math.sqrt(car.vx*car.vx + car.vy*car.vy) / car.maxSpeed;
-    
-    if (keys['a'] || keys['arrowleft']) car.angle -= currentSteer * (0.4 + speedRatio);
-    if (keys['d'] || keys['arrowright']) car.angle += currentSteer * (0.4 + speedRatio);
+        // Grid Cyber-Floor Map
+        const gridHelper = new THREE.GridHelper(1000, 200, 0x00ffcc, 0x222233);
+        gridHelper.position.y = -0.01;
+        scene.add(gridHelper);
 
-    // 2. Compute Direction Vectors
-    const forwardX = Math.cos(car.angle);
-    const forwardY = Math.sin(car.angle);
+        // --- 3. BUILD 3D CAR OBJECT ASSEMBLY ---
+        const carGroup = new THREE.Group();
+        scene.add(carGroup);
 
-    // 3. Engine Throttle & Reverse
-    if (keys['w'] || keys['arrowup']) {
-        car.vx += forwardX * car.acceleration;
-        car.vy += forwardY * car.acceleration;
-    } else if (keys['s'] || keys['arrowdown']) {
-        car.vx -= forwardX * (car.acceleration * 0.6);
-        car.vy -= forwardY * (car.acceleration * 0.6);
-    }
+        // Car Body Mesh
+        const bodyGeo = new THREE.BoxGeometry(1.8, 0.6, 4);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff3366, roughness: 0.2, metalness: 0.5 });
+        const carBody = new THREE.Mesh(bodyGeo, bodyMat);
+        carBody.position.y = 0.5;
+        carBody.castShadow = true;
+        carBody.receiveShadow = true;
+        carGroup.add(carBody);
 
-    // 4. Grip / Friction Intercept Logic
-    let driftFactor = car.weightTransfer;
-    if (keys[' ']) { // Handbrake active
-        driftFactor = 0.02; // Drastic traction loss
-        car.vx *= car.handbrakeFriction;
-        car.vy *= car.handbrakeFriction;
-    }
+        // Cabin Mesh
+        const cabinGeo = new THREE.BoxGeometry(1.4, 0.5, 1.8);
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111115, roughness: 0.1, metalness: 0.9 });
+        const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+        cabin.position.set(0, 0.9, -0.2);
+        cabin.castShadow = true;
+        carGroup.add(cabin);
 
-    // project velocity onto forward direction vector
-    const currentSpeed = car.vx * forwardX + car.vy * forwardY;
-    
-    // Linear Interpolation matching real heading vector vs actual trajectory matrix
-    car.vx = car.vx * (1 - driftFactor) + forwardX * currentSpeed * driftFactor;
-    car.vy = car.vy * (1 - driftFactor) + forwardY * currentSpeed * driftFactor;
-
-    // Apply natural fluid drag forces
-    car.vx *= (1 - car.drag);
-    car.vy *= (1 - car.drag);
-
-    // Speed clamping
-    const absoluteSpeed = Math.sqrt(car.vx*car.vx + car.vy*car.vy);
-    if (absoluteSpeed > car.maxSpeed) {
-        car.vx = (car.vx / absoluteSpeed) * car.maxSpeed;
-        car.vy = (car.vy / absoluteSpeed) * car.maxSpeed;
-    }
-
-    // 5. Update Coordinates
-    car.x += car.vx;
-    car.y += car.vy;
-
-    // Screen wrap modulo-snapping boundaries
-    if (car.x < 0) car.x = canvas.width;
-    if (car.x > canvas.width) car.x = 0;
-    if (car.y < 0) car.y = canvas.height;
-    if (car.y > canvas.height) car.y = 0;
-
-    // 6. Calculate Drift Angle Metric
-    let angleRad = 0;
-    if (absoluteSpeed > 1) {
-        const moveAngle = Math.atan2(car.vy, car.vx);
-        angleRad = Math.abs(moveAngle - car.angle);
-        // Normalize angle variance checks
-        while (angleRad > Math.PI) angleRad -= Math.PI * 2;
-        angleRad = Math.abs(angleRad);
-    }
-    
-    const displayAngle = Math.round(angleRad * (180 / Math.PI));
-
-    // 7. Scoring & Visual Particle Emission triggers
-    if (displayAngle > 22 && absoluteSpeed > 2.5) {
-        score += Math.floor(displayAngle / 10);
+        // Wheels Assembly
+        const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16);
+        wheelGeo.rotateZ(Math.PI / 2);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
         
-        // Spawn skid tracks from rear axle footprint positions
-        tireTracks.push({x: car.x - forwardX * 10, y: car.y - forwardY * 10, alpha: 0.4});
-        if (tireTracks.length > 200) tireTracks.shift();
+        const wheels = [];
+        const wheelPositions = [
+            [-0.9, 0.4, 1.2],  // Front Left
+            [0.9, 0.4, 1.2],   // Front Right
+            [-0.9, 0.4, -1.2], // Rear Left
+            [0.9, 0.4, -1.2]   // Rear Right
+        ];
 
-        createSmoke(car.x - forwardX * 12, car.y - forwardY * 12);
-    }
+        wheelPositions.forEach((pos) => {
+            const wMesh = new THREE.Mesh(wheelGeo, wheelMat);
+            wMesh.position.set(...pos);
+            wMesh.castShadow = true;
+            carGroup.add(wMesh);
+            wheels.push(wMesh);
+        });
 
-    // Live UI Telemetry rendering
-    document.getElementById('speedo').innerText = `Speed: ${Math.round(absoluteSpeed * 20)} km/h`;
-    document.getElementById('drift-angle').innerText = `Angle: ${displayAngle}°`;
-    document.getElementById('drift-score').innerText = `Drift Points: ${score}`;
-}
+        // --- 4. ADVANCED DRIFT PHYSICS ENGINE VARIABLES ---
+        const physics = {
+            x: 0, z: 0,
+            vx: 0, vz: 0,
+            heading: 0,
+            speed: 0,
+            steerAngle: 0,
+            // Configuration parameters
+            accel: 0.12,
+            maxSpeed: 24,
+            drag: 0.04,
+            gripDefault: 0.14,
+            gripHandbrake: 0.015,
+            score: 0
+        };
 
-function drawGame() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // --- 5. 3D PARTICLE SMOKE SYSTEM ---
+        const smokeParticles = [];
+        const smokeGeo = new THREE.SphereGeometry(0.15, 6, 6);
+        const smokeMat = new THREE.MeshBasicMaterial({ color: 0x88888a, transparent: true, opacity: 0.5 });
 
-    // Environment background
-    drawGrid(canvas.width - car.x, canvas.height - car.y);
-
-    // Draw historic Skid Marks
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-    tireTracks.forEach(track => {
-        ctx.beginPath();
-        ctx.arc(track.x, track.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-    });
-
-    // Draw active tire smoke particles
-    smokeParticles.forEach((p, index) => {
-        p.x += p.vx;
-        p.y += p.vy;
-        p.alpha -= 0.015;
-        if (p.alpha <= 0) {
-            smokeParticles.splice(index, 1);
-            return;
+        function emitSmoke() {
+            // Emit from rear wheel zones
+            const leftRearOffset = new THREE.Vector3(-0.9, 0.2, -1.2).applyMatrix4(carGroup.matrixWorld);
+            const rightRearOffset = new THREE.Vector3(0.9, 0.2, -1.2).applyMatrix4(carGroup.matrixWorld);
+            
+            [leftRearOffset, rightRearOffset].forEach(pos => {
+                const p = new THREE.Mesh(smokeGeo, smokeMat.clone());
+                p.position.copy(pos);
+                scene.add(p);
+                smokeParticles.push({
+                    mesh: p,
+                    age: 0,
+                    maxAge: 30,
+                    vx: (Math.random() - 0.5) * 0.1,
+                    vy: Math.random() * 0.05 + 0.05,
+                    vz: (Math.random() - 0.5) * 0.1
+                });
+            });
         }
-        ctx.fillStyle = `rgba(200, 200, 200, ${p.alpha})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
-    });
 
-    // Draw Car geometry profile
-    ctx.save();
-    ctx.translate(car.x, car.y);
-    ctx.rotate(car.angle);
+        function updateParticles() {
+            for (let i = smokeParticles.length - 1; i >= 0; i--) {
+                const p = smokeParticles[i];
+                p.age++;
+                p.mesh.position.x += p.vx;
+                p.mesh.position.y += p.vy;
+                p.mesh.position.z += p.vz;
+                p.mesh.scale.multiplyScalar(1.04);
+                p.mesh.material.opacity = 1 - (p.age / p.maxAge);
+                
+                if (p.age >= p.maxAge) {
+                    scene.remove(p.mesh);
+                    p.mesh.geometry.dispose();
+                    p.mesh.material.dispose();
+                    smokeParticles.splice(i, 1);
+                }
+            }
+        }
 
-    // Chassis Box
-    ctx.fillStyle = '#e74c3c';
-    ctx.fillRect(-16, -10, 32, 20);
+        // --- 6. MULTI-TOUCH ENGINE CONTROLS ---
+        const inputs = { steering: 0, gas: false, brake: false };
+        const activeTouches = {};
+        
+        const joyBase = document.getElementById('joystick-base');
+        const joyKnob = document.getElementById('joystick-knob');
+        const gasPedal = document.getElementById('gas-pedal');
+        const brakePedal = document.getElementById('handbrake-pedal');
 
-    // Windshield accents
-    ctx.fillStyle = '#3498db';
-    ctx.fillRect(4, -7, 6, 14);
+        function parseTouches(e) {
+            e.preventDefault();
+            const rectGas = gasPedal.getBoundingClientRect();
+            const rectBrake = brakePedal.getBoundingClientRect();
+            
+            // Clear prior states before verifying running tracks
+            inputs.gas = false;
+            inputs.brake = false;
+            let joystickTouchId = null;
 
-    // Tail lights
-    ctx.fillStyle = '#f1c40f';
-    ctx.fillRect(-16, -9, 2, 4);
-    ctx.fillRect(-16, 5, 2, 4);
+            // Find tracking references across lists
+            for (let i = 0; i < e.touches.length; i++) {
+                const t = e.touches[i];
+                
+                // Segment 1: Check UI Pedal Overlap Boxes
+                if (t.clientX >= rectGas.left && t.clientX <= rectGas.right && t.clientY >= rectGas.top && t.clientY <= rectGas.bottom) {
+                    inputs.gas = true;
+                    continue;
+                }
+                if (t.clientX >= rectBrake.left && t.clientX <= rectBrake.right && t.clientY >= rectBrake.top && t.clientY <= rectBrake.bottom) {
+                    inputs.brake = true;
+                    continue;
+                }
 
-    ctx.restore();
-}
+                // Segment 2: Left Side Screen Screen Space holds dynamic Joystick
+                if (t.clientX < window.innerWidth / 2) {
+                    joystickTouchId = t;
+                }
+            }
 
-function loop() {
-    updatePhysics();
-    drawGame();
-    requestAnimationFrame(loop);
-}
+            // Handle Steering Calculations based on dynamic origin reference
+            if (joystickTouchId) {
+                const id = joystickTouchId.identifier;
+                if (!activeTouches[id]) {
+                    // Touch down point sets base origin
+                    activeTouches[id] = { startX: joystickTouchId.clientX, startY: joystickTouchId.clientY };
+                    joyBase.style.left = `${joystickTouchId.clientX}px`;
+                    joyBase.style.top = `${joystickTouchId.clientY}px`;
+                    joyBase.style.visibility = 'visible';
+                }
+                
+                const origin = activeTouches[id];
+                const dx = joystickTouchId.clientX - origin.startX;
+                const limit = 45; 
+                const clampedX = Math.max(-limit, Math.min(limit, dx));
+                
+                joyKnob.style.transform = `translate(${clampedX}px, 0px)`;
+                inputs.steering = clampedX / limit; // Normalized scalar value between -1 and 1
+            } else {
+                // Clear active joystick reference maps
+                joyBase.style.visibility = 'hidden';
+                joyKnob.style.transform = 'translate(0px, 0px)';
+                inputs.steering = 0;
+                for (let key in activeTouches) delete activeTouches[key];
+            }
+        }
 
-// Initialize loop execution
-loop();
-</script>
+        // Hook multi-touch intercept matrices
+        const overlay = document.getElementById('touch-overlay');
+        overlay.addEventListener('touchstart', parseTouches, {passive: false});
+        overlay.addEventListener('touchmove', parseTouches, {passive: false});
+        overlay.addEventListener('touchend', parseTouches, {passive: false});
+        overlay.addEventListener('touchcancel', parseTouches, {passive: false});
 
+        // Add Fallback support for Keyboard Testing (WASD / Arrows / Space)
+        const keys = {};
+        window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+        function processKeyboardFallbacks() {
+            if (keys['w'] || keys['arrowup']) inputs.gas = true;
+            if (keys[' ']) inputs.brake = true;
+            if (keys['a'] || keys['arrowleft']) inputs.steering = -1;
+            else if (keys['d'] || keys['arrowright']) inputs.steering = 1;
+        }
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            physics.x = 0; physics.z = 0; physics.vx = 0; physics.vz = 0; physics.speed = 0; physics.heading = 0;
+        });
+
+        // --- 7. FRAME RENDERING & PHYSICS CALCULATIONS MATRIX ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            processKeyboardFallbacks();
+
+            // 1. Apply Steering Dynamics
+            const targetSteer = inputs.steering * 0.45;
+            physics.steerAngle += (targetSteer - physics.steerAngle) * 0.15;
+            wheels[0].rotation.y = physics.steerAngle;
+            wheels[1].rotation.y = physics.steerAngle;
+            
+            if (Math.abs(physics.speed) > 0.5) {
+                const directionMod = physics.speed > 0 ? 1 : -1;
+                physics.heading -= physics.steerAngle * 0.035 * directionMod * (Math.min(physics.speed, 12) / 12);
+            }
+
+            // 2. Resolve Thrust Vectors
+            const forwardX = Math.sin(physics.heading);
+            const forwardZ = Math.cos(physics.heading);
+
+            if (inputs.gas) {
+                physics.vx += forwardX * physics.accel;
+                physics.vz += forwardZ * physics.accel;
+            }
+
+            // 3. Drift Slide Friction Matrix Calculations
+            const currentGrip = inputs.brake ? physics.gripHandbrake : physics.gripDefault;
+            physics.speed = physics.vx * forwardX + physics.vz * forwardZ;
+
+            // Blend current momentum velocities vector with forward car heading vector alignment
+            physics.vx = physics.vx * (1 - currentGrip) + forwardX * physics.speed * currentGrip;
+            physics.vz = physics.vz * (1 - currentGrip) + forwardZ * physics.speed * currentGrip;
+
+            // Drag resistance clamp
+            physics.vx *= (1 - physics.drag);
+            physics.vz *= (1 - physics.drag);
+
+            // 4. Transform Position Data
+            physics.x += physics.vx;
+            physics.z += physics.vz;
+
+            carGroup.position.set(physics.x, 0, physics.z);
+            carGroup.rotation.y = physics.heading;
+
+            // Animate wheel spinning matching velocity rates
+            wheels.forEach(w => w.rotation.x += physics.speed * 0.05);
+
+            // 5. Evaluate Drift Slip Angle for scoring telemetry
+            const velocityHeading = Math.atan2(physics.vx, physics.vz);
+            let driftAngle = Math.abs(velocityHeading - physics.heading);
+            while (driftAngle > Math.PI) driftAngle -= Math.PI * 2;
+            driftAngle = Math.abs(driftAngle);
+            
+            const displayAngle = Math.round(driftAngle * (180 / Math.PI));
+            const actualVelocity = Math.sqrt(physics.vx*physics.vx + physics.vz*physics.vz);
+
+            if (displayAngle > 20 && actualVelocity > 2) {
+                physics.score += Math.floor(displayAngle / 8);
+                emitSmoke();
+                bodyMat.color.setHex(0x00ffcc); // Glow cyan when actively drifting
+            } else {
+                bodyMat.color.setHex(0xff3366); // Return to default pink/red
+            }
+
+            updateParticles();
+
+            // 6. Smooth Camera Chase Interpolation Matrix
+            const camDistance = 8;
+            const camHeight = 4;
+            const targetCamX = physics.x - forwardX * camDistance;
+            const targetCamZ = physics.z - forwardZ * camDistance;
+            const targetCamY = camHeight;
+
+            camera.position.x += (targetCamX - camera.position.x) * 0.08;
+            camera.position.y += (targetCamY - camera.position.y) * 0.08;
+            camera.position.z += (targetCamZ - camera.position.z) * 0.08;
+            camera.lookAt(physics.x, physics.y + 0.5, physics.z);
+
+            // Update Dynamic Shadow Maps to track near viewport space
+            dirLight.position.set(physics.x + 20, 60, physics.z + 10);
+            dirLight.target = carGroup;
+
+            // 7. Update HUD interface Elements
+            document.getElementById('score-display').innerText = `DRIFT PTS: ${physics.score}`;
+            document.getElementById('speed-display').innerText = `${Math.round(actualVelocity * 6)} KM/H`;
+            document.getElementById('angle-display').innerText = `ANGLE: ${displayAngle}°`;
+
+            renderer.render(scene, camera);
+        }
+
+        // Handle scaling corrections automatically on viewport adjustments
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize Rendering Loops
+        animate();
+    </script>
 </body>
 </html>
